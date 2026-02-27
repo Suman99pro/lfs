@@ -49,17 +49,140 @@ section() { echo -e "\n${BOLD}${BLUE}========== $* ==========${NC}\n"; }
 step()    { echo -e "${CYAN}  --> $*${NC}"; }
 
 # =============================================================================
+#  AUTO-INSTALL DEPENDENCIES
+# =============================================================================
+install_dependencies() {
+  section "Installing Host Dependencies"
+
+  [[ $EUID -ne 0 ]] && error "This script must be run as root (sudo)."
+
+  # Detect package manager
+  if command -v apt-get &>/dev/null; then
+    PKG_MANAGER="apt"
+  elif command -v dnf &>/dev/null; then
+    PKG_MANAGER="dnf"
+  elif command -v yum &>/dev/null; then
+    PKG_MANAGER="yum"
+  elif command -v zypper &>/dev/null; then
+    PKG_MANAGER="zypper"
+  elif command -v pacman &>/dev/null; then
+    PKG_MANAGER="pacman"
+  else
+    error "No supported package manager found (apt/dnf/yum/zypper/pacman)."
+  fi
+
+  log "Detected package manager: $PKG_MANAGER"
+
+  case $PKG_MANAGER in
+    apt)
+      step "Updating apt package lists..."
+      apt-get update -qq
+
+      step "Installing required packages via apt..."
+      apt-get install -y \
+        bash gcc g++ make gawk bison flex texinfo \
+        wget curl tar xz-utils bzip2 gzip zlib1g-dev \
+        fdisk parted gdisk \
+        dosfstools e2fsprogs util-linux \
+        libncurses-dev libssl-dev libelf-dev \
+        bc python3 ninja-build meson \
+        autoconf automake libtool pkg-config \
+        grub-efi-amd64-bin grub-efi-amd64-signed \
+        efibootmgr \
+        binutils build-essential \
+        expect dejagnu \
+        m4 gperf gettext \
+        perl python3-pip \
+        git patch diffutils findutils sed \
+        cpio rsync file lzma
+      ;;
+
+    dnf|yum)
+      step "Installing required packages via $PKG_MANAGER..."
+      $PKG_MANAGER install -y \
+        bash gcc gcc-c++ make gawk bison flex texinfo \
+        wget curl tar xz bzip2 gzip zlib-devel \
+        fdisk parted gdisk \
+        dosfstools e2fsprogs util-linux \
+        ncurses-devel openssl-devel elfutils-libelf-devel \
+        bc python3 ninja-build meson \
+        autoconf automake libtool pkg-config \
+        grub2-efi-x64-modules grub2-tools-efi \
+        efibootmgr \
+        binutils \
+        expect dejagnu \
+        m4 gperf gettext \
+        perl python3-pip \
+        git patch diffutils findutils sed \
+        cpio rsync file
+      ;;
+
+    zypper)
+      step "Installing required packages via zypper..."
+      zypper install -y \
+        bash gcc gcc-c++ make gawk bison flex texinfo \
+        wget curl tar xz bzip2 gzip zlib-devel \
+        fdisk parted \
+        dosfstools e2fsprogs util-linux \
+        ncurses-devel libopenssl-devel libelf-devel \
+        bc python3 ninja meson \
+        autoconf automake libtool pkg-config \
+        grub2-x86_64-efi efibootmgr \
+        binutils \
+        expect \
+        m4 gperf gettext-tools \
+        perl python3-pip \
+        git patch diffutils findutils sed \
+        cpio rsync file
+      ;;
+
+    pacman)
+      step "Installing required packages via pacman..."
+      pacman -Sy --noconfirm \
+        bash gcc make gawk bison flex texinfo \
+        wget curl tar xz bzip2 gzip zlib \
+        fdisk parted \
+        dosfstools e2fsprogs util-linux \
+        ncurses openssl libelf \
+        bc python ninja meson \
+        autoconf automake libtool pkg-config \
+        grub efibootmgr \
+        binutils base-devel \
+        expect \
+        m4 gperf gettext \
+        perl python-pip \
+        git patch diffutils findutils sed \
+        cpio rsync file
+      ;;
+  esac
+
+  # Ensure python3 is the default python if not already set
+  if ! command -v python &>/dev/null && command -v python3 &>/dev/null; then
+    step "Symlinking python3 -> python..."
+    ln -sfv $(command -v python3) /usr/local/bin/python 2>/dev/null || true
+  fi
+
+  log "All dependencies installed successfully."
+}
+
+# =============================================================================
 #  SAFETY CHECKS
 # =============================================================================
 preflight_checks() {
   section "Preflight Checks"
 
-  [[ $EUID -ne 0 ]] && error "This script must be run as root (sudo)."
-
-  # Check host tools
-  for tool in bash gcc g++ make gawk bison tar wget fdisk mkfs.ext4 mkfs.fat mkswap; do
-    command -v $tool &>/dev/null || error "Required tool not found: $tool  (install it first)"
+  # Verify all required tools are now present
+  step "Verifying required tools..."
+  MISSING_TOOLS=()
+  for tool in bash gcc g++ make gawk bison tar wget fdisk mkfs.ext4 mkfs.fat mkswap parted; do
+    if ! command -v $tool &>/dev/null; then
+      MISSING_TOOLS+=("$tool")
+    fi
   done
+
+  if [[ ${#MISSING_TOOLS[@]} -gt 0 ]]; then
+    error "Still missing tools after install attempt: ${MISSING_TOOLS[*]}\nPlease install them manually and re-run."
+  fi
 
   # Check bash version >= 3.2
   BASH_VER=$(bash --version | head -1 | awk '{print $4}' | cut -d. -f1)
@@ -2151,6 +2274,7 @@ main() {
   echo -e "  Parallel Jobs: $JOBS"
   echo ""
 
+  install_dependencies
   preflight_checks
   phase1_partition
   phase2_sources
